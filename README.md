@@ -1,5 +1,7 @@
 # AtomS3 WS2812B SPI control
 
+https://github.com/user-attachments/assets/24d0adf8-48e1-4dc2-ac7b-b6b0a5849b1c
+
 <div><video controls src="./ws2812b.mp4" muted="true"></video></div>
 
 This project runs on AtomS3 and set designated RGB pattern WS2812B strip.
