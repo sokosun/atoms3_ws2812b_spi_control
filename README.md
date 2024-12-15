@@ -14,7 +14,7 @@ This project runs on AtomS3 and sends designated RGB pattern to WS2812B strip th
 ## Notes
 
 * RGB pattern corresponds to 144 LEDs. 145th and more ones don't change.
-* SPI spends 4.2272ms (5284bytes = 42272bits @10MHz SCLK) to refresh 144 LEDs.
+* SPI spends 4.234ms (1764bytes = 14112bits @3.333333MHz SCLK) to refresh 144 LEDs.
 
 ## Supported Hardware
 

@@ -1,66 +1,60 @@
 #include <M5Unified.h>
 #include <ESP32DMASPIMaster.h>
 
-const int SPI_MOSI_PIN = 8;
-const uint32_t NUM_OF_LEDs = 144;
-const int INTERVAL_ms = 100;
+constexpr int SPI_MOSI_PIN = 8;
+constexpr uint32_t RESET_BYTES = 36;
+constexpr uint32_t ENCODE_BYTES = 4;
+constexpr uint32_t NUM_OF_LEDs = 144;
+constexpr int INTERVAL_ms = 100;
+constexpr size_t BUFFER_SIZE = RESET_BYTES + 3 * ENCODE_BYTES * NUM_OF_LEDs; // '3' means RGB colors
+
 uint32_t rgbmap[NUM_OF_LEDs];
 
 ESP32DMASPI::Master spi_master;
-static constexpr size_t BUFFER_SIZE = 5284; // (Reset) 100Bytes + (RGB) 3Bytes * (encode) 12 * 144LEDs
 uint8_t *dma_tx_buf;
 uint8_t *dma_rx_buf = nullptr; // Nothing to receive
 
 // Notes
-// - 10MHz SPI MOSI controls WS2812B LEDs
-//   = T = 0.1us
+// - 3.333333MHz SPI MOSI controls WS2812B LEDs
+//   = T = 0.3us
 // - WS2812B LED detects following patterns as commands
-//   = Reset |_____________(80us)____________| : 800bits
-//   = 0     |‾‾‾‾‾‾‾‾‾|___| (0.9us, 0.3us)    : 12bits
-//   = 1     |‾‾‾‾‾‾|______| (0.6us, 0.6us)    : 12bits
+//   = Reset |_____________(80+us)___________| : 266.66bits -> 288bits
+//   = 0     |‾‾‾|_________| (0.3us, 0.9us)    : 4bits
+//   = 1     |‾‾‾‾‾‾|______| (0.6us, 0.6us)    : 4bits
 // - Each WS2812B LED requires 24bit RGB value to change colors
 //   = MSB first & GRB sequence (G7, G6, ... G1, R7, R6, ..., R1, B7, B6, ... B1)
-//   = SPI sends 288 bits data for each LED
+//   = SPI sends 96 bits data for each LED
 
-// Pack 100 Bytes Reset command to 'buf'.
+// Pack 36 Bytes Reset command to 'buf'.
 void PackReset(uint8_t *buf){
-  for(int i=0;i<100;i++){
+  for(int i=0;i<RESET_BYTES;i++){
     buf[i] = 0;
   }
 }
 
-// Encode 'val' (2bits) to 3Bytes pattern and Pack it.
-// 'val' must be 0, 1, 2 or 3.
-// // Each bit is converted to 12bit. (0 -> 0xe00, 1 -> 0xfc0)
-void PackGRBsub(uint8_t *buf, uint8_t val){
-  const uint8_t lut_x12[] = {
-    0xe0, 0x0e, 0x00, // <- 00
-    0xe0, 0x0f, 0xc0, // <- 01
-    0xfc, 0x0e, 0x00, // <- 10
-    0xfc, 0x0f, 0xc0  // <- 11
-  };
-
-  buf[0] = lut_x12[0 + val*3];
-  buf[1] = lut_x12[1 + val*3];
-  buf[2] = lut_x12[2 + val*3];
-}
-
-// Pack 36 Bytes Color command to 'buf'.
+// Pack 12 Bytes Color command to 'buf'
 void PackGRB(uint8_t *buf, uint32_t rgb){
-  PackGRBsub(buf,    (rgb & 0x0000c000) >> 14);
-  PackGRBsub(buf+3,  (rgb & 0x00003000) >> 12);
-  PackGRBsub(buf+6,  (rgb & 0x00000c00) >> 10);
-  PackGRBsub(buf+9,  (rgb & 0x00000300) >>  8);
-
-  PackGRBsub(buf+12, (rgb & 0x00c00000) >> 22);
-  PackGRBsub(buf+15, (rgb & 0x00300000) >> 20);
-  PackGRBsub(buf+18, (rgb & 0x000c0000) >> 18);
-  PackGRBsub(buf+21, (rgb & 0x00030000) >> 16);
-
-  PackGRBsub(buf+24, (rgb & 0x000000c0) >> 6);
-  PackGRBsub(buf+27, (rgb & 0x00000030) >> 4);
-  PackGRBsub(buf+30, (rgb & 0x0000000c) >> 2);
-  PackGRBsub(buf+33,  rgb & 0x00000003);
+  static constexpr uint8_t lut[] = {
+    0x88, // <- 00
+    0x8c, // <- 01
+    0xc8, // <- 10
+    0xcc  // <- 11
+  };
+  
+  buf[ 0] = lut[(rgb & 0x0000c000) >> 14];
+  buf[ 1] = lut[(rgb & 0x00003000) >> 12];
+  buf[ 2] = lut[(rgb & 0x00000c00) >> 10];
+  buf[ 3] = lut[(rgb & 0x00000300) >>  8];
+  
+  buf[ 4] = lut[(rgb & 0x00c00000) >> 22];
+  buf[ 5] = lut[(rgb & 0x00300000) >> 20];
+  buf[ 6] = lut[(rgb & 0x000c0000) >> 18];
+  buf[ 7] = lut[(rgb & 0x00030000) >> 16];
+  
+  buf[ 8] = lut[(rgb & 0x000000c0) >>  6];
+  buf[ 9] = lut[(rgb & 0x00000030) >>  4];
+  buf[10] = lut[(rgb & 0x0000000c) >>  2];
+  buf[11] = lut[ rgb & 0x00000003       ];
 }
 
 void setup()
@@ -75,7 +69,7 @@ void setup()
 
   dma_tx_buf = spi_master.allocDMABuffer(BUFFER_SIZE);
 
-  spi_master.setFrequency(10000000);
+  spi_master.setFrequency(3333333);
   spi_master.setMaxTransferSize(BUFFER_SIZE);
   spi_master.begin(2, -1, -1, SPI_MOSI_PIN, -1); // Enable MOSI pin only
 }
@@ -107,7 +101,7 @@ void loop()
 
   PackReset(dma_tx_buf);
   for(auto i=0; i<NUM_OF_LEDs; i++){
-    PackGRB(dma_tx_buf + 100 + i * 36, rgbmap[i]);
+    PackGRB(dma_tx_buf + RESET_BYTES + i * 3 * ENCODE_BYTES, rgbmap[i]);
   }
 
   spi_master.transfer(dma_tx_buf, dma_rx_buf, BUFFER_SIZE);
